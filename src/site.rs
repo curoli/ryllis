@@ -87,12 +87,40 @@ impl Site {
             "add an index.md to at least one language directory"
         );
 
-        let paths: BTreeSet<_> = content.values().flat_map(|pages| pages.keys()).collect();
+        // Every language exports this full set, including missing-translation pages.
+        let mut output_files = BTreeMap::new();
+        for (language, translations) in &content {
+            for path in translations.keys() {
+                let output = path.with_extension("html");
+                let (previous, previous_language) = *output_files
+                    .entry(output.clone())
+                    .or_insert((path, language));
+                ensure!(
+                    previous == path,
+                    "{} and {} both generate {}",
+                    Path::new(previous_language).join(previous).display(),
+                    Path::new(language).join(path).display(),
+                    output.display()
+                );
+            }
+        }
+        for (output, (source, language)) in &output_files {
+            for directory in output.ancestors().skip(1) {
+                if let Some((previous, previous_language)) = output_files.get(directory) {
+                    anyhow::bail!(
+                        "{} and {} conflict because {} is both a generated file and a required directory",
+                        Path::new(previous_language).join(previous).display(),
+                        Path::new(language).join(source).display(),
+                        directory.display()
+                    );
+                }
+            }
+        }
         let languages = content.keys().cloned().collect();
         let mut pages = BTreeMap::new();
         for (language, translations) in &content {
-            for path in &paths {
-                let file = Path::new(language).join(path.with_extension("html"));
+            for (output, (path, _)) in &output_files {
+                let file = Path::new(language).join(output);
                 let url = page_url(&file);
                 let navigation = navigation(language, path, &languages);
                 let (title, body, links) = match translations.get(*path) {
@@ -128,34 +156,47 @@ impl Site {
     }
 
     pub fn page(&self, path: &str) -> Option<&str> {
-        let path = path
-            .split('/')
-            .map(|segment| {
-                percent_decode_str(segment)
-                    .decode_utf8()
-                    .ok()
-                    .map(|s| encode(&s))
-            })
-            .collect::<Option<Vec<_>>>()?
-            .join("/");
-        let first = path.split('/').nth(1)?;
-        let path = match self
-            .languages
-            .iter()
-            .find(|tag| tag.eq_ignore_ascii_case(first))
-        {
-            Some(language) => format!("/{language}{}", &path[first.len() + 1..]),
+        let path = normalize_url_path(path)?;
+        let path = match self.language_prefix(&path) {
+            Some((language, rest)) => format!("/{language}{rest}"),
             None => format!("/{}{path}", self.default_language),
         };
+        self.prefixed_page(&path)
+    }
+
+    fn language_prefix<'a>(&self, path: &'a str) -> Option<(&str, &'a str)> {
+        let path = path.strip_prefix('/')?;
+        let end = path.find('/').unwrap_or(path.len());
+        let (prefix, rest) = path.split_at(end);
+        let language = self
+            .languages
+            .iter()
+            .find(|tag| tag.eq_ignore_ascii_case(prefix))?;
+        Some((language, rest))
+    }
+
+    fn prefixed_page(&self, path: &str) -> Option<&str> {
         let canonical = path
             .strip_suffix("/index.html")
             .map(|base| format!("{base}/"));
         let directory = format!("{path}/");
         self.pages
-            .get(&path)
+            .get(path)
             .or_else(|| canonical.as_ref().and_then(|url| self.pages.get(url)))
             .or_else(|| self.pages.get(&directory))
             .map(|page| page.html.as_str())
+    }
+
+    fn exported_link_exists(&self, path: &str) -> bool {
+        let Some(path) = normalize_url_path(path) else {
+            return false;
+        };
+        if self.language_prefix(&path).is_some() {
+            self.prefixed_page(&path).is_some()
+        } else {
+            self.prefixed_page(&format!("/{}{path}", self.default_language))
+                .is_some()
+        }
     }
 
     pub fn broken_links(&self) -> BTreeSet<String> {
@@ -170,7 +211,7 @@ impl Site {
                 }
                 match base.join(link) {
                     Ok(target) if target.origin() != origin.origin() => {}
-                    Ok(target) if self.page(target.path()).is_some() => {}
+                    Ok(target) if self.exported_link_exists(target.path()) => {}
                     _ => {
                         broken.insert(format!("{path} → {link}"));
                     }
@@ -356,6 +397,18 @@ fn page_url(file: &Path) -> String {
 
 fn read_text(path: &Path) -> Result<String> {
     fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
+}
+
+fn normalize_url_path(path: &str) -> Option<String> {
+    path.split('/')
+        .map(|segment| {
+            percent_decode_str(segment)
+                .decode_utf8()
+                .ok()
+                .map(|text| encode(&text))
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|segments| segments.join("/"))
 }
 
 fn encode(segment: &str) -> String {

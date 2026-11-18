@@ -14,7 +14,7 @@ Open `http://127.0.0.1:3000/` for the English home page, `/de/` for the German h
 
 Put Markdown under language directories, even for a single-language site. Matching relative paths are translations of the same page. At least one language directory needs a homepage. An `index.md` is available at its directory URL and at `index.html`. Other Markdown files use the `.html` extension in their URLs. Use those URLs in Markdown links, for example `[About](about.html)`. Missing translations get generated pages that list the available pages in the requested language.
 
-The build writes to `target/ryllis-site`. Use `--output PATH` to select another new directory, including for subsequent builds. The output contains the language-prefixed HTML tree. A static host needs a rewrite rule to serve unprefixed URLs in the default language. The `check` command validates internal Markdown links against generated pages, including placeholders.
+The build writes to `target/ryllis-site`. Use `--output PATH` to select another new directory, including for subsequent builds. The output contains the language-prefixed HTML tree. A static host needs a rewrite rule to serve unprefixed URLs in the default language. The `check` command validates internal Markdown links against generated pages, including placeholders. Match the case of the language directory when writing a language-prefixed link.
 
 Use `--template FILE` to supply a shared HTML template. Include `{{content}}` for the rendered body and `<base href="{{path}}">` so relative links resolve under both prefixed and unprefixed URLs. The optional slots are `{{language}}`, `{{title}}`, and `{{navigation}}`.
 
