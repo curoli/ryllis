@@ -76,3 +76,52 @@ fn check_uses_the_exported_spelling_of_language_prefixes() {
     assert!(error.contains("/en/ → /pt-br/index.html"), "{error}");
     assert!(error.contains("2 broken internal link(s)"), "{error}");
 }
+
+#[test]
+fn check_lists_present_and_missing_languages_for_each_incomplete_page() {
+    let site = tempfile::tempdir().unwrap();
+    let source = site.path();
+    let home = "[German news](/de/news/)";
+    write_source(source, "en/index.md", home);
+    write_source(source, "de/index.md", "# Startseite");
+    write_source(source, "es/index.md", "# Inicio");
+    write_source(source, "fr/index.md", "# Accueil");
+    write_source(source, "en/news/index.md", "# News");
+    write_source(source, "fr/news/index.md", "# Actualités");
+    write_source(source, "de/about.md", "# Über uns");
+    write_source(source, "es/about.md", "# Sobre nosotros");
+
+    let result = ryllis(source, &["check"]);
+    let report = String::from_utf8(result.stderr).unwrap().replace('\\', "/");
+    assert!(result.status.success(), "{report}");
+    assert_eq!(
+        report.lines().collect::<Vec<_>>(),
+        [
+            "about.md is present in de, es and missing in en, fr",
+            "news/index.md is present in en, fr and missing in de, es",
+        ],
+    );
+
+    write_source(
+        source,
+        "en/index.md",
+        &format!("{home}\n\n[Broken](/missing.html)"),
+    );
+    let result = ryllis(source, &["check"]);
+    let report = String::from_utf8(result.stderr).unwrap().replace('\\', "/");
+    assert!(!result.status.success());
+    assert!(
+        report.contains("about.md is present in de, es and missing in en, fr"),
+        "{report}"
+    );
+    assert!(report.contains("1 broken internal link(s)"), "{report}");
+
+    write_source(source, "en/index.md", home);
+    write_source(source, "de/news/index.md", "# Neuigkeiten");
+    write_source(source, "es/news/index.md", "# Noticias");
+    write_source(source, "en/about.md", "# About us");
+    write_source(source, "fr/about.md", "# À propos");
+    let result = ryllis(source, &["check"]);
+    assert!(result.status.success());
+    assert!(result.stderr.is_empty());
+}

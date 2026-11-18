@@ -38,7 +38,7 @@ enum Command {
         #[arg(long, default_value = "127.0.0.1:3000")]
         bind: SocketAddr,
     },
-    /// Report internal Markdown links whose destination has no generated page.
+    /// Report broken internal Markdown links and missing translations.
     Check,
 }
 
@@ -82,7 +82,16 @@ async fn main() -> Result<()> {
             axum::serve(listener, app).await?;
         }
         Command::Check => {
-            let broken = source.load()?.broken_links();
+            let site = source.load()?;
+            for page in site.missing_translations() {
+                eprintln!(
+                    "{} is present in {} and missing in {}",
+                    page.path.display(),
+                    page.present.join(", "),
+                    page.missing.join(", "),
+                );
+            }
+            let broken = site.broken_links();
             for link in &broken {
                 eprintln!("{link}");
             }
