@@ -1,7 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt::Write,
+    fmt::Write as _,
     fs,
+    io::Write as _,
     path::{Path, PathBuf},
 };
 
@@ -240,7 +241,10 @@ impl Site {
         for page in self.pages.values() {
             let file = tree.join(&page.file);
             fs::create_dir_all(file.parent().expect("generated file has a parent"))?;
-            fs::write(&file, &page.html)
+            let mut destination = fs::File::create_new(&file)
+                .with_context(|| format!("creating generated file {}", page.file.display()))?;
+            destination
+                .write_all(page.html.as_bytes())
                 .with_context(|| format!("writing {}", page.file.display()))?;
         }
         fs::rename(tree, output).with_context(|| format!("publishing {}", output.display()))?;
@@ -421,4 +425,40 @@ fn escape(text: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_does_not_publish_when_two_pages_resolve_to_the_same_file() {
+        let destination = tempfile::tempdir().unwrap();
+        let output = destination.path().join("site");
+        // Use the same file path to reproduce the collision on case-sensitive filesystems.
+        let pages = ["/en/About.html", "/en/about.html"]
+            .into_iter()
+            .map(|url| {
+                let page = Page {
+                    file: Path::new("en").join("About.html"),
+                    html: url.to_owned(),
+                    links: Vec::new(),
+                };
+                (url.to_owned(), page)
+            })
+            .collect();
+        let site = Site {
+            default_language: "en".to_owned(),
+            languages: BTreeSet::from(["en".to_owned()]),
+            pages,
+        };
+
+        let error = site.write(&output).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::AlreadyExists,
+        );
+        assert!(!output.exists());
+        assert!(destination.path().read_dir().unwrap().next().is_none());
+    }
 }
