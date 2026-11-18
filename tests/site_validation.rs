@@ -76,3 +76,46 @@ fn check_uses_the_exported_spelling_of_language_prefixes() {
     assert!(error.contains("/en/ → /pt-br/index.html"), "{error}");
     assert!(error.contains("2 broken internal link(s)"), "{error}");
 }
+
+#[test]
+fn check_reports_missing_translations_in_both_directions() {
+    let site = tempfile::tempdir().unwrap();
+    let source = site.path();
+    let home = "[German news](/de/news/)";
+    write_source(source, "en/index.md", home);
+    write_source(source, "de/index.md", "# Startseite");
+    write_source(source, "en/news/index.md", "# News");
+    write_source(source, "de/about.md", "# Über uns");
+
+    let result = ryllis(source, &["check"]);
+    let report = String::from_utf8(result.stderr).unwrap().replace('\\', "/");
+    assert!(result.status.success(), "{report}");
+    assert_eq!(
+        report.lines().collect::<Vec<_>>(),
+        [
+            "Missing translation for de/news/index.md",
+            "Missing translation for en/about.md",
+        ],
+    );
+
+    write_source(
+        source,
+        "en/index.md",
+        &format!("{home}\n\n[Broken](/missing.html)"),
+    );
+    let result = ryllis(source, &["check"]);
+    let report = String::from_utf8(result.stderr).unwrap().replace('\\', "/");
+    assert!(!result.status.success());
+    assert!(
+        report.contains("Missing translation for en/about.md"),
+        "{report}"
+    );
+    assert!(report.contains("1 broken internal link(s)"), "{report}");
+
+    write_source(source, "en/index.md", home);
+    write_source(source, "de/news/index.md", "# Neuigkeiten");
+    write_source(source, "en/about.md", "# About us");
+    let result = ryllis(source, &["check"]);
+    assert!(result.status.success());
+    assert!(result.stderr.is_empty());
+}

@@ -22,6 +22,7 @@ struct Page {
     file: PathBuf,
     html: String,
     links: Vec<String>,
+    is_placeholder: bool,
 }
 
 struct Markdown {
@@ -124,7 +125,8 @@ impl Site {
                 let file = Path::new(language).join(output);
                 let url = page_url(&file);
                 let navigation = navigation(language, path, &languages);
-                let (title, body, links) = match translations.get(*path) {
+                let translation = translations.get(*path);
+                let (title, body, links) = match translation {
                     Some(markdown) => (
                         markdown.title.as_str(),
                         markdown.html.clone(),
@@ -146,7 +148,15 @@ impl Site {
                         ("content", &body),
                     ],
                 );
-                pages.insert(url, Page { file, html, links });
+                pages.insert(
+                    url,
+                    Page {
+                        file,
+                        html,
+                        links,
+                        is_placeholder: translation.is_none(),
+                    },
+                );
             }
         }
         Ok(Self {
@@ -198,6 +208,13 @@ impl Site {
             self.prefixed_page(&format!("/{}{path}", self.default_language))
                 .is_some()
         }
+    }
+
+    pub fn missing_translations(&self) -> impl Iterator<Item = PathBuf> + '_ {
+        self.pages
+            .values()
+            .filter(|page| page.is_placeholder)
+            .map(|page| page.file.with_extension("md"))
     }
 
     pub fn broken_links(&self) -> BTreeSet<String> {
@@ -443,6 +460,7 @@ mod tests {
                     file: Path::new("en").join("About.html"),
                     html: url.to_owned(),
                     links: Vec::new(),
+                    is_placeholder: false,
                 };
                 (url.to_owned(), page)
             })
