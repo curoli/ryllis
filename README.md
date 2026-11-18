@@ -16,7 +16,7 @@ Put Markdown under language directories, even for a single-language site. Matchi
 
 The build writes to `target/ryllis-site`. Use `--output PATH` to select another new directory, including for subsequent builds. The output contains the language-prefixed HTML tree. A static host needs a rewrite rule to serve unprefixed URLs in the default language. The `check` command validates internal Markdown links against generated pages, including placeholders. Match the case of the language directory when writing a language-prefixed link.
 
-`check` also reports the expected Markdown path for each missing translation. The example reports `de/news/index.md`. Missing translations are warnings, and broken internal links cause the command to fail.
+`check` reports each page with incomplete translations by its Markdown path relative to the language directories. It lists every language where the page is present and every language where it is missing. The example reports `news/index.md is present in en and missing in de`. Missing translations are warnings, and broken internal links cause the command to fail.
 
 Use `--template FILE` to supply a shared HTML template. Include `{{content}}` for the rendered body and `<base href="{{path}}">` so relative links resolve under both prefixed and unprefixed URLs. The optional slots are `{{language}}`, `{{title}}`, and `{{navigation}}`.
 

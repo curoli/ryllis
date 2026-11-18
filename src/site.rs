@@ -22,7 +22,6 @@ struct Page {
     file: PathBuf,
     html: String,
     links: Vec<String>,
-    is_placeholder: bool,
 }
 
 struct Markdown {
@@ -31,10 +30,17 @@ struct Markdown {
     links: Vec<String>,
 }
 
+pub struct MissingTranslation {
+    pub path: PathBuf,
+    pub present: Vec<String>,
+    pub missing: Vec<String>,
+}
+
 pub struct Site {
     default_language: String,
     languages: BTreeSet<String>,
     pages: BTreeMap<String, Page>,
+    missing_translations: Vec<MissingTranslation>,
 }
 
 impl Site {
@@ -120,23 +126,31 @@ impl Site {
         }
         let languages = content.keys().cloned().collect();
         let mut pages = BTreeMap::new();
-        for (language, translations) in &content {
-            for (output, (path, _)) in &output_files {
+        let mut missing_translations = Vec::new();
+        for (output, (path, _)) in &output_files {
+            let mut present = Vec::new();
+            let mut missing = Vec::new();
+            for (language, translations) in &content {
                 let file = Path::new(language).join(output);
                 let url = page_url(&file);
                 let navigation = navigation(language, path, &languages);
-                let translation = translations.get(*path);
-                let (title, body, links) = match translation {
-                    Some(markdown) => (
-                        markdown.title.as_str(),
-                        markdown.html.clone(),
-                        markdown.links.clone(),
-                    ),
-                    None => (
-                        "Translation unavailable",
-                        missing_translation(language, translations),
-                        Vec::new(),
-                    ),
+                let (title, body, links) = match translations.get(*path) {
+                    Some(markdown) => {
+                        present.push(language);
+                        (
+                            markdown.title.as_str(),
+                            markdown.html.clone(),
+                            markdown.links.clone(),
+                        )
+                    }
+                    None => {
+                        missing.push(language);
+                        (
+                            "Translation unavailable",
+                            missing_translation(language, translations),
+                            Vec::new(),
+                        )
+                    }
                 };
                 let html = render_template(
                     &template,
@@ -148,21 +162,21 @@ impl Site {
                         ("content", &body),
                     ],
                 );
-                pages.insert(
-                    url,
-                    Page {
-                        file,
-                        html,
-                        links,
-                        is_placeholder: translation.is_none(),
-                    },
-                );
+                pages.insert(url, Page { file, html, links });
+            }
+            if !missing.is_empty() {
+                missing_translations.push(MissingTranslation {
+                    path: (*path).clone(),
+                    present: present.into_iter().cloned().collect(),
+                    missing: missing.into_iter().cloned().collect(),
+                });
             }
         }
         Ok(Self {
             default_language,
             languages,
             pages,
+            missing_translations,
         })
     }
 
@@ -210,11 +224,8 @@ impl Site {
         }
     }
 
-    pub fn missing_translations(&self) -> impl Iterator<Item = PathBuf> + '_ {
-        self.pages
-            .values()
-            .filter(|page| page.is_placeholder)
-            .map(|page| page.file.with_extension("md"))
+    pub fn missing_translations(&self) -> &[MissingTranslation] {
+        &self.missing_translations
     }
 
     pub fn broken_links(&self) -> BTreeSet<String> {
@@ -460,7 +471,6 @@ mod tests {
                     file: Path::new("en").join("About.html"),
                     html: url.to_owned(),
                     links: Vec::new(),
-                    is_placeholder: false,
                 };
                 (url.to_owned(), page)
             })
@@ -469,6 +479,7 @@ mod tests {
             default_language: "en".to_owned(),
             languages: BTreeSet::from(["en".to_owned()]),
             pages,
+            missing_translations: Vec::new(),
         };
 
         let error = site.write(&output).unwrap_err();

@@ -83,8 +83,13 @@ async fn main() -> Result<()> {
         }
         Command::Check => {
             let site = source.load()?;
-            for path in site.missing_translations() {
-                eprintln!("Missing translation for {}", path.display());
+            for page in site.missing_translations() {
+                eprintln!(
+                    "{} is present in {} and missing in {}",
+                    page.path.display(),
+                    page.present.join(", "),
+                    page.missing.join(", "),
+                );
             }
             let broken = site.broken_links();
             for link in &broken {
