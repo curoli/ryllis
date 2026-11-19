@@ -1,4 +1,4 @@
-# ryllis
+# Ryllis <img src="assets/ryllis-amaryllis.png" alt="" width="48" height="48">
 
 Website creator and maintainer making updates simple. The Rust prototype builds and previews a multilingual Markdown site.
 
