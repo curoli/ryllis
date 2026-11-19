@@ -18,7 +18,7 @@ use site::Site;
 #[derive(Parser)]
 #[command(about = "Build and preview a multilingual Markdown site")]
 struct Args {
-    /// Read settings from this file instead of ryllis.toml in the working directory.
+    /// Read settings from this file instead of the default configuration file.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     #[arg(long, global = true)]
@@ -69,18 +69,28 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let config = Config::load(args.config.as_deref())?;
     let source = Source {
-        directory: args.source.unwrap_or(config.source),
-        default_language: args.default_language.unwrap_or(config.default_language),
+        directory: args
+            .source
+            .or(config.source)
+            .unwrap_or_else(|| "content".into()),
+        default_language: args
+            .default_language
+            .or(config.default_language)
+            .unwrap_or_else(|| "en".into()),
         template: args.template.or(config.template),
     };
     match args.command {
         Command::Build { output } => {
-            let output = output.unwrap_or(config.output);
+            let output = output
+                .or(config.output)
+                .unwrap_or_else(|| "target/ryllis-site".into());
             let count = source.load()?.write(&output)?;
             println!("Wrote {count} pages to {}", output.display());
         }
         Command::Preview { bind } => {
-            let bind = bind.unwrap_or(config.bind);
+            let bind = bind
+                .or(config.bind)
+                .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 3000)));
             source.load()?;
             let listener = tokio::net::TcpListener::bind(bind)
                 .await

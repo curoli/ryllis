@@ -12,6 +12,7 @@ fn write_source(root: &Path, path: &str, markdown: &str) {
 
 fn ryllis(source: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ryllis"))
+        .env("XDG_CONFIG_HOME", source.join(".test-config"))
         .arg("--source")
         .arg(source)
         .args(args)
@@ -45,7 +46,7 @@ bind = "127.0.0.1:4000"
     let command = || Command::new(env!("CARGO_BIN_EXE_ryllis"));
     let check = command()
         .current_dir(root.join("project"))
-        .arg("check")
+        .args(["--config", "ryllis.toml", "check"])
         .output()
         .unwrap();
     assert!(
@@ -110,11 +111,65 @@ fn invalid_and_explicitly_missing_config_files_are_reported() {
     assert!(error.contains("reading config missing.toml"), "{error}");
 
     fs::write(root.join("ryllis.toml"), "soruce = 'content'").unwrap();
-    let check = command().output().unwrap();
+    let check = command()
+        .args(["--config", "ryllis.toml"])
+        .output()
+        .unwrap();
     let error = String::from_utf8_lossy(&check.stderr);
     assert!(!check.status.success());
     assert!(error.contains("parsing config ryllis.toml"), "{error}");
     assert!(error.contains("soruce"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_config_uses_home_or_xdg_and_defaults_to_working_directory_paths() {
+    let site = tempfile::tempdir().unwrap();
+    let root = site.path();
+    write_source(
+        root,
+        "home/.config/ryllis/ryllis.toml",
+        "default_language = 'de'",
+    );
+    write_source(root, "site/content/de/index.md", "# Home configuration");
+    write_source(root, "xdg/ryllis/ryllis.toml", "source = 'articles'");
+    write_source(
+        root,
+        "xdg/ryllis/articles/en/index.md",
+        "# XDG configuration",
+    );
+
+    let command = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ryllis"));
+        command
+            .current_dir(root.join("site"))
+            .env("HOME", root.join("home"))
+            .env_remove("XDG_CONFIG_HOME");
+        command
+    };
+    let build = command()
+        .args(["build", "--output", "home-output"])
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    assert!(root.join("site/home-output/de/index.html").is_file());
+
+    let build = command()
+        .env("XDG_CONFIG_HOME", root.join("xdg"))
+        .arg("build")
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let page = fs::read_to_string(root.join("site/target/ryllis-site/en/index.html")).unwrap();
+    assert!(page.contains("XDG configuration"));
 }
 
 #[test]
