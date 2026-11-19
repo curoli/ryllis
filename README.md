@@ -20,6 +20,22 @@ The build writes to `target/ryllis-site`. Use `--output PATH` to select another 
 
 Use `--template FILE` to supply a shared HTML template. Include `{{content}}` for the rendered body and `<base href="{{path}}">` so relative links resolve under both prefixed and unprefixed URLs. The optional slots are `{{language}}`, `{{title}}`, and `{{navigation}}`.
 
+## Project configuration
+
+Create `ryllis.toml` in the directory where you run Ryllis. For the example site, you could use these settings.
+
+```toml
+source = "examples/site"
+output = "target/example-site"
+default_language = "en"
+bind = "127.0.0.1:3000"
+# template = "templates/page.html"
+```
+
+`build`, `check`, and `preview` read this file automatically. Use `--config PATH` to select a different file. Relative paths in the file, including omitted directory defaults, are resolved from the config file's directory. Paths supplied as CLI flags are resolved from the working directory. CLI flags override the corresponding settings.
+
+The built-in defaults are `content` for the source, `target/ryllis-site` for the output, `en` for the default language, and `127.0.0.1:3000` for the preview address. Ryllis uses its built-in template unless you supply one.
+
 ## The plan
 
 Ryllis is a Rust app to help set up and maintain a website.

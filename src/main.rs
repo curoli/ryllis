@@ -1,3 +1,4 @@
+mod config;
 mod site;
 
 use std::{net::SocketAddr, path::PathBuf};
@@ -11,15 +12,19 @@ use axum::{
     routing::get,
 };
 use clap::{Parser, Subcommand};
+use config::Config;
 use site::Site;
 
 #[derive(Parser)]
 #[command(about = "Build and preview a multilingual Markdown site")]
 struct Args {
-    #[arg(long, global = true, default_value = "content")]
-    source: PathBuf,
-    #[arg(long, global = true, default_value = "en")]
-    default_language: String,
+    /// Read settings from this file instead of ryllis.toml in the working directory.
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
+    #[arg(long, global = true)]
+    source: Option<PathBuf>,
+    #[arg(long, global = true)]
+    default_language: Option<String>,
     #[arg(long, global = true)]
     template: Option<PathBuf>,
     #[command(subcommand)]
@@ -30,13 +35,13 @@ struct Args {
 enum Command {
     /// Write the generated HTML to a new directory.
     Build {
-        #[arg(long, default_value = "target/ryllis-site")]
-        output: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
     /// Preview the site, reloading source files when requested.
     Preview {
-        #[arg(long, default_value = "127.0.0.1:3000")]
-        bind: SocketAddr,
+        #[arg(long)]
+        bind: Option<SocketAddr>,
     },
     /// Report broken internal Markdown links and missing translations.
     Check,
@@ -62,17 +67,20 @@ impl Source {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    let config = Config::load(args.config.as_deref())?;
     let source = Source {
-        directory: args.source,
-        default_language: args.default_language,
-        template: args.template,
+        directory: args.source.unwrap_or(config.source),
+        default_language: args.default_language.unwrap_or(config.default_language),
+        template: args.template.or(config.template),
     };
     match args.command {
         Command::Build { output } => {
+            let output = output.unwrap_or(config.output);
             let count = source.load()?.write(&output)?;
             println!("Wrote {count} pages to {}", output.display());
         }
         Command::Preview { bind } => {
+            let bind = bind.unwrap_or(config.bind);
             source.load()?;
             let listener = tokio::net::TcpListener::bind(bind)
                 .await
