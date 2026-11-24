@@ -1,5 +1,7 @@
 # Garden news
 
-The spring planting beds are ready. Bring a pair of gloves if you would like to help.
+{% for page in pages if page.directory == "news" and page.path != "news/index.md" -%}
+- [{{ page.path | replace("news/", "") | replace(".md", "") | replace("-", " ") | title }}]({{ page.url }})
+{% endfor %}
 
 [Back to the garden home page](../).

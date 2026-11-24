@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
+use minijinja::{Environment, UndefinedBehavior, Value, context, syntax::SyntaxConfig};
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use pulldown_cmark::{Event, Parser, Tag, html};
 use url::Url;
@@ -125,12 +126,50 @@ impl Site {
             }
         }
         let languages = content.keys().cloned().collect();
+        let mut environment = Environment::new();
+        environment.set_undefined_behavior(UndefinedBehavior::Strict);
+        environment.set_syntax(
+            SyntaxConfig::builder()
+                .keep_trailing_newline(true)
+                .build()?,
+        );
+        let mut rendered = BTreeMap::new();
+        for (language, sources) in &content {
+            let pages = Value::from_iter(sources.keys().map(|path| {
+                let url = page_url(&Path::new(language).join(path.with_extension("html")));
+                let path = path
+                    .to_str()
+                    .expect("validated UTF-8 path")
+                    .replace(std::path::MAIN_SEPARATOR, "/");
+                let (directory, _) = path.rsplit_once('/').unwrap_or(("", &path));
+                context! { path => &path, directory => directory, url => url }
+            }));
+            let template_context = context! { language => language, pages => pages };
+            let mut translations = BTreeMap::new();
+            for (relative, path) in sources {
+                let source = read_text(path)?;
+                let markdown = if ["{{", "{%", "{#"]
+                    .iter()
+                    .any(|marker| source.contains(marker))
+                {
+                    environment.render_named_str(
+                        &path.to_string_lossy(),
+                        &source,
+                        template_context.clone(),
+                    )?
+                } else {
+                    source
+                };
+                translations.insert(relative.clone(), render_markdown(path, &markdown));
+            }
+            rendered.insert(language, translations);
+        }
         let mut pages = BTreeMap::new();
         let mut missing_translations = Vec::new();
         for (output, (path, _)) in &output_files {
             let mut present = Vec::new();
             let mut missing = Vec::new();
-            for (language, translations) in &content {
+            for (&language, translations) in &rendered {
                 let file = Path::new(language).join(output);
                 let url = page_url(&file);
                 let navigation = navigation(language, path, &languages);
@@ -283,7 +322,7 @@ impl Site {
 fn read_content(
     root: &Path,
     directory: &Path,
-    pages: &mut BTreeMap<PathBuf, Markdown>,
+    pages: &mut BTreeMap<PathBuf, PathBuf>,
 ) -> Result<()> {
     for entry in
         fs::read_dir(directory).with_context(|| format!("reading {}", directory.display()))?
@@ -300,7 +339,7 @@ fn read_content(
                 "Markdown path is not UTF-8: {}",
                 path.display()
             );
-            pages.insert(relative, render_markdown(&path, &read_text(&path)?));
+            pages.insert(relative, path);
         }
     }
     Ok(())
