@@ -38,26 +38,25 @@ Relative paths in the file are resolved from the config file's directory. CLI pa
 
 The built-in defaults are `content` for the source, `target/ryllis-site` for the output, `en` for the default language, and `127.0.0.1:3000` for the preview address. Ryllis uses its built-in template unless you supply one.
 
-## The plan
+## How Ryllis works
 
-Ryllis is a Rust app to help set up and maintain a website.
+1. Ryllis discovers the Markdown files in each language directory and builds an index of their paths and URLs.
+2. Ryllis evaluates MiniJinja expressions, blocks, and comments in each Markdown file. A file with no template syntax passes through as written. Both kinds of files use the same `.md` extension.
+3. Ryllis renders the resulting Markdown as HTML, collects its internal links for `check`, and wraps it in the shared HTML layout.
+4. Ryllis creates a page for each language. Matching paths are translations of the same page, and missing translations get a placeholder. The build exports the language-prefixed directory tree, and the preview also serves unprefixed URLs in the default language.
 
-Ryllis compiles source content into web pages.
+### Templates in Markdown
 
-The source content resides in the source directory and its sub-directories and consists of Markdown files with Ryllis extensions. Each Markdown file becomes an HTML file, and the structure of the source directory tree is preserved in the target HTML directory tree. An `index.md` in a language directory or any of its subdirectories becomes an `index.html`.
+Templates have access to `language`, the current language tag, and `pages`, the index of source files in that language. Each entry has a language-relative Markdown `path`, a `directory` (empty for files at the language root), and a language-prefixed `url`. A list based on this index includes pages written in the current language.
 
-The Markdown files define the core content. Ryllis renders the content as HTML and adds styling as well as navigation elements and other elements that are shared by the pages. For these added elements, Ryllis uses templates that are separate from the source content.
+The example site's news index generates its links from `pages`. Use a MiniJinja raw block to include literal template syntax, even inside a fenced Markdown code block.
 
-The content root directory contains a subdirectory for each language, such as "en" for English. Ryllis adds a language selector to each page. A missing translation gets a placeholder that lists the pages available in the selected language.
+````markdown
+{% raw %}
+```jinja
+{{ language }}
+```
+{% endraw %}
+````
 
-Upon enabling AI by setting a feature (e.g. "openai") and providing the appropriate API key, Ryllis can offer, whenever content is added or changed, to translate it to some or all of the other supported languages.
-
-Ryllis should help as much as possible to set the site up and running. There should be feature flags that enable Ryllis to help configuring a chosen web service to serve the files (for example "nginx" or "caddy"). Initially, we will assume a Debian/Ubuntu-like system.
-
-Ryllis also supports generating overviews over all files found in a given directory tree. This feature is invoked by the appropriate Markdown extension. Ryllis can be directed to understand certain meanings of folder names, for example, that "de" stands for German, or that "2026/09/26" stands for September 26, 2026. This feature can be used to generate an inventory of things offered, or a blog or newsfeed.
-
-Ryllis can also test whether all pages are available at the expected URLs.
-
-Every page is available through a path that starts with a language tag. When a path without language tag is requested, a language is chosen and the request is internally routed to the appropriate path. The language may be chosen by considering the requested domain, or the location of the requester. Otherwise, there is a default language. If no other default language is set, it is English.
-
-Ryllis should be as helpful as possible. Ideally, the user runs Ryllis, follows directions provided by Ryllis, edits some content, and ends up with a decent running website.
+Template errors identify the Markdown file and line. The shared HTML layout is applied separately and uses the slots described above.

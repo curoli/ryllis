@@ -21,6 +21,43 @@ fn ryllis(source: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
+fn markdown_templates_generate_checked_links_and_preserve_raw_code() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("content");
+    let output = temp.path().join("site");
+    let page = "# News in {{ language }}\n\n{% raw %}`{{ example }}`{% endraw %}\n\n\
+        {% for page in pages if page.path == 'post.md' %}[Post]({{ page.url }}){% endfor %}";
+    write_source(&source, "en/index.md", page);
+    write_source(&source, "en/post.md", "# Ordinary Markdown");
+    let result = ryllis(&source, &["build", "--output", output.to_str().unwrap()]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let html = fs::read_to_string(output.join("en/index.html")).unwrap();
+    assert!(html.contains("<h1>News in en</h1>"));
+    assert!(html.contains("<code>{{ example }}</code>"));
+    assert!(html.contains("<a href=\"/en/post.html\">Post</a>"));
+    assert!(ryllis(&source, &["check"]).status.success());
+
+    write_source(
+        &source,
+        "en/index.md",
+        "# News\n[Broken]({{ '/missing.html' }})",
+    );
+    let result = ryllis(&source, &["check"]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("/en/ → /missing.html"));
+
+    write_source(&source, "en/index.md", "# News\n{% unknown %}");
+    let result = ryllis(&source, &["check"]);
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success());
+    assert!(error.contains("index.md:2"), "{error}");
+}
+
+#[test]
 fn project_config_paths_and_cli_overrides_use_their_own_directories() {
     let site = tempfile::tempdir().unwrap();
     let root = site.path();
