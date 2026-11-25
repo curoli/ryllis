@@ -8,6 +8,8 @@ license = "MIT"
 anyhow = "1"
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
+glob = "0.3"
+mime_guess = "2"
 minijinja = "3.1"
 percent-encoding = "2"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }

@@ -15,6 +15,7 @@ pub struct Config {
     pub output: Option<PathBuf>,
     pub default_language: Option<String>,
     pub template: Option<PathBuf>,
+    pub assets: Vec<String>,
     pub bind: Option<SocketAddr>,
 }
 

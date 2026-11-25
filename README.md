@@ -38,6 +38,18 @@ Relative paths in the file are resolved from the config file's directory. CLI pa
 
 The built-in defaults are `content` for the source, `target/ryllis-site` for the output, `en` for the default language, and `127.0.0.1:3000` for the preview address. Ryllis uses its built-in template unless you supply one.
 
+### Static assets
+
+Add an `assets` list to your site configuration to copy matching files into the build unchanged and serve them in preview.
+
+```toml
+assets = ["*.jpg", "*.svg", "*.css", "assets", "scripts/**/*.js"]
+```
+
+Patterns are case-sensitive globs. A pattern without a slash matches a file or folder name at any depth. A pattern with a slash matches a path relative to the source directory. Use `**/` to match any number of directory levels. When a pattern matches a folder, all files inside it are assets, including Markdown files. The list is empty by default.
+
+Source-relative paths carry through to the output. For example, `assets/logo.svg` is shared at `/assets/logo.svg`, while `de/assets/banner.svg` is available at `/de/assets/banner.svg`. Top-level asset-only folders do not count as languages. Use root-relative URLs for shared assets and language-prefixed or page-relative URLs for localized assets. The preview also resolves unprefixed localized assets in the default language. The `check` command resolves Markdown links and images against exported pages and assets.
+
 ## How Ryllis works
 
 1. Ryllis discovers the Markdown files in each language directory and builds an index of their paths and URLs.
