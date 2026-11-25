@@ -315,3 +315,81 @@ fn check_lists_present_and_missing_languages_for_each_incomplete_page() {
     assert!(result.status.success());
     assert!(result.stderr.is_empty());
 }
+
+#[test]
+fn build_and_check_use_configured_assets_at_their_source_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let source = root.join("content");
+    write_source(
+        &source,
+        "en/index.md",
+        "# Home\n![Banner](banner.svg) [Styles](/styles.css) [Notes](/assets/nested/raw.md)",
+    );
+    write_source(&source, "de/index.md", "# Startseite");
+    write_source(&source, "en/banner.svg", "<svg/>");
+    write_source(&source, "styles.css", "body {}");
+    write_source(&source, "assets/nested/raw.md", "{{ untouched }}");
+    write_source(&source, "scripts/nested/app.js", "console.log('test')");
+    write_source(&source, "scripts/nested/ignored.txt", "ignored");
+    let logo = [0, 255, 128];
+    fs::write(source.join("assets/logo.jpg"), logo).unwrap();
+    let config = root.join("ryllis.toml");
+    fs::write(
+        &config,
+        r#"source = "content"
+output = "public"
+assets = ["*.svg", "*.css", "assets", "scripts/**/*.js"]
+"#,
+    )
+    .unwrap();
+    let run = |command| {
+        Command::new(env!("CARGO_BIN_EXE_ryllis"))
+            .arg("--config")
+            .arg(&config)
+            .arg(command)
+            .output()
+            .unwrap()
+    };
+
+    for command in ["check", "build"] {
+        let result = run(command);
+        assert!(
+            result.status.success() && result.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    let output = root.join("public");
+    assert_eq!(fs::read(output.join("assets/logo.jpg")).unwrap(), logo);
+    for file in [
+        "styles.css",
+        "en/banner.svg",
+        "assets/nested/raw.md",
+        "scripts/nested/app.js",
+    ] {
+        assert_eq!(
+            fs::read(output.join(file)).unwrap(),
+            fs::read(source.join(file)).unwrap()
+        );
+    }
+    assert!(!output.join("de/banner.svg").exists());
+    assert!(!output.join("scripts/nested/ignored.txt").exists());
+
+    write_source(&source, "en/missing.md", "# Page");
+    write_source(&source, "de/missing.html", "asset at a placeholder's path");
+    fs::write(
+        &config,
+        r#"source = "content"
+assets = ["*.svg", "*.css", "assets", "scripts/**/*.js", "*.html"]
+"#,
+    )
+    .unwrap();
+    let result = run("check");
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success());
+    assert!(
+        error.contains("asset conflicts with generated page"),
+        "{error}"
+    );
+}

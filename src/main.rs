@@ -7,12 +7,13 @@ use anyhow::{Context, Result, bail};
 use axum::{
     Router,
     extract::State,
-    http::{StatusCode, Uri},
-    response::{Html, IntoResponse, Response},
+    http::{StatusCode, Uri, header},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use clap::{Parser, Subcommand};
 use config::Config;
+use glob::Pattern;
 use site::Site;
 
 #[derive(Parser)]
@@ -52,6 +53,7 @@ struct Source {
     directory: PathBuf,
     default_language: String,
     template: Option<PathBuf>,
+    assets: Vec<Pattern>,
 }
 
 impl Source {
@@ -60,6 +62,7 @@ impl Source {
             &self.directory,
             &self.default_language,
             self.template.as_deref(),
+            &self.assets,
         )
     }
 }
@@ -78,6 +81,13 @@ async fn main() -> Result<()> {
             .or(config.default_language)
             .unwrap_or_else(|| "en".into()),
         template: args.template.or(config.template),
+        assets: config
+            .assets
+            .iter()
+            .map(|pattern| {
+                Pattern::new(pattern).with_context(|| format!("invalid asset pattern {pattern:?}"))
+            })
+            .collect::<Result<_>>()?,
     };
     match args.command {
         Command::Build { output } => {
@@ -123,15 +133,13 @@ async fn main() -> Result<()> {
 }
 
 async fn preview(State(source): State<Source>, uri: Uri) -> Response {
-    let site = tokio::task::spawn_blocking(move || source.load())
+    let response = tokio::task::spawn_blocking(move || source.load()?.preview(uri.path()))
         .await
         .context("loading preview source")
         .and_then(|result| result);
-    match site {
-        Ok(site) => match site.page(uri.path()) {
-            Some(html) => Html(html.to_owned()).into_response(),
-            None => (StatusCode::NOT_FOUND, "Page not found").into_response(),
-        },
+    match response {
+        Ok(Some((mime, bytes))) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "Page not found").into_response(),
         Err(error) => {
             eprintln!("{error:#}");
             (StatusCode::INTERNAL_SERVER_ERROR, "Could not load the site").into_response()

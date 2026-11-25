@@ -2,11 +2,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     fs,
-    io::Write as _,
+    io::{self, Write as _},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, ensure};
+use glob::{MatchOptions, Pattern};
 use minijinja::{Environment, UndefinedBehavior, Value, context, syntax::SyntaxConfig};
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use pulldown_cmark::{Event, Parser, Tag, html};
@@ -25,6 +26,11 @@ struct Page {
     links: Vec<String>,
 }
 
+struct Asset {
+    file: PathBuf,
+    source: PathBuf,
+}
+
 struct Markdown {
     title: String,
     html: String,
@@ -41,11 +47,17 @@ pub struct Site {
     default_language: String,
     languages: BTreeSet<String>,
     pages: BTreeMap<String, Page>,
+    assets: BTreeMap<String, Asset>,
     missing_translations: Vec<MissingTranslation>,
 }
 
 impl Site {
-    pub fn load(source: &Path, default_language: &str, template: Option<&Path>) -> Result<Self> {
+    pub fn load(
+        source: &Path,
+        default_language: &str,
+        template: Option<&Path>,
+        assets: &[Pattern],
+    ) -> Result<Self> {
         let template = match template {
             Some(path) => read_text(path)?,
             None => DEFAULT_TEMPLATE.to_owned(),
@@ -58,11 +70,32 @@ impl Site {
         );
 
         let mut content = BTreeMap::new();
+        let mut asset_files = BTreeMap::new();
         for entry in
             fs::read_dir(source).with_context(|| format!("reading {}", source.display()))?
         {
             let entry = entry?;
-            if !entry.file_type()?.is_dir() {
+            let path = entry.path();
+            let kind = entry.file_type()?;
+            let matched = matches_asset(Path::new(&entry.file_name()), assets);
+            if !kind.is_dir() {
+                if kind.is_file() && matched {
+                    add_asset(source, path, &mut asset_files)?;
+                }
+                continue;
+            }
+            let mut pages = BTreeMap::new();
+            let asset_count = asset_files.len();
+            read_content(
+                source,
+                &path,
+                &path,
+                assets,
+                matched,
+                &mut pages,
+                &mut asset_files,
+            )?;
+            if matched || (pages.is_empty() && asset_count != asset_files.len()) {
                 continue;
             }
             let language = entry.file_name().into_string().map_err(|name| {
@@ -78,8 +111,6 @@ impl Site {
                     .any(|tag: &String| tag.eq_ignore_ascii_case(&language)),
                 "duplicate language tag: {language}"
             );
-            let mut pages = BTreeMap::new();
-            read_content(&entry.path(), &entry.path(), &mut pages)?;
             content.insert(language, pages);
         }
         let default_language = content
@@ -211,21 +242,57 @@ impl Site {
                 });
             }
         }
+        let mut exported_files = asset_files
+            .values()
+            .map(|asset| asset.file.as_path())
+            .collect::<BTreeSet<_>>();
+        for page in pages.values() {
+            ensure!(
+                exported_files.insert(&page.file),
+                "asset conflicts with generated page {}",
+                page.file.display()
+            );
+        }
+        for file in &exported_files {
+            for directory in file.ancestors().skip(1) {
+                ensure!(
+                    !exported_files.contains(directory),
+                    "cannot export {} because {} is both a file and a required directory",
+                    file.display(),
+                    directory.display()
+                );
+            }
+        }
         Ok(Self {
             default_language,
             languages,
             pages,
+            assets: asset_files,
             missing_translations,
         })
     }
 
-    pub fn page(&self, path: &str) -> Option<&str> {
-        let path = normalize_url_path(path)?;
-        let path = match self.language_prefix(&path) {
+    pub fn preview(&self, path: &str) -> Result<Option<(String, Vec<u8>)>> {
+        let Some(path) = normalize_url_path(path) else {
+            return Ok(None);
+        };
+        let fallback = match self.language_prefix(&path) {
             Some((language, rest)) => format!("/{language}{rest}"),
             None => format!("/{}{path}", self.default_language),
         };
-        self.prefixed_page(&path)
+        if let Some(asset) = self
+            .assets
+            .get(&path)
+            .or_else(|| self.assets.get(&fallback))
+        {
+            let bytes = fs::read(&asset.source)
+                .with_context(|| format!("reading {}", asset.source.display()))?;
+            let mime = mime_guess::from_path(&asset.file).first_or_octet_stream();
+            return Ok(Some((mime.to_string(), bytes)));
+        }
+        Ok(self
+            .prefixed_page(&fallback)
+            .map(|html| ("text/html; charset=utf-8".into(), html.as_bytes().to_vec())))
     }
 
     fn language_prefix<'a>(&self, path: &'a str) -> Option<(&str, &'a str)> {
@@ -255,12 +322,14 @@ impl Site {
         let Some(path) = normalize_url_path(path) else {
             return false;
         };
-        if self.language_prefix(&path).is_some() {
-            self.prefixed_page(&path).is_some()
+        let page_path = if self.language_prefix(&path).is_some() {
+            path.clone()
         } else {
-            self.prefixed_page(&format!("/{}{path}", self.default_language))
-                .is_some()
-        }
+            format!("/{}{path}", self.default_language)
+        };
+        self.assets.contains_key(&path)
+            || self.assets.contains_key(&page_path)
+            || self.prefixed_page(&page_path).is_some()
     }
 
     pub fn missing_translations(&self) -> &[MissingTranslation] {
@@ -314,15 +383,61 @@ impl Site {
                 .write_all(page.html.as_bytes())
                 .with_context(|| format!("writing {}", page.file.display()))?;
         }
+        for asset in self.assets.values() {
+            let destination = tree.join(&asset.file);
+            fs::create_dir_all(destination.parent().expect("asset file has a parent"))?;
+            (|| -> io::Result<()> {
+                let mut source = fs::File::open(&asset.source)?;
+                let mut destination = fs::File::create_new(destination)?;
+                io::copy(&mut source, &mut destination)?;
+                Ok(())
+            })()
+            .with_context(|| format!("copying asset {}", asset.source.display()))?;
+        }
         fs::rename(tree, output).with_context(|| format!("publishing {}", output.display()))?;
         Ok(self.pages.len())
     }
 }
 
+fn matches_asset(relative: &Path, patterns: &[Pattern]) -> bool {
+    let Some(path) = relative.to_str() else {
+        return false;
+    };
+    let path = path.replace(std::path::MAIN_SEPARATOR, "/");
+    let name = path.rsplit('/').next().expect("path has a file name");
+    let options = MatchOptions {
+        require_literal_separator: true,
+        ..MatchOptions::new()
+    };
+    patterns.iter().any(|pattern| {
+        let candidate = if pattern.as_str().contains('/') {
+            path.as_str()
+        } else {
+            name
+        };
+        pattern.matches_with(candidate, options)
+    })
+}
+
+fn add_asset(root: &Path, source: PathBuf, assets: &mut BTreeMap<String, Asset>) -> Result<()> {
+    let file = source.strip_prefix(root)?.to_owned();
+    ensure!(
+        file.to_str().is_some(),
+        "asset path is not UTF-8: {}",
+        source.display()
+    );
+    assets.insert(file_url(&file), Asset { file, source });
+    Ok(())
+}
+
 fn read_content(
     root: &Path,
+    language_root: &Path,
     directory: &Path,
+    patterns: &[Pattern],
+    asset_directory: bool,
     pages: &mut BTreeMap<PathBuf, PathBuf>,
+    assets: &mut BTreeMap<String, Asset>,
 ) -> Result<()> {
     for entry in
         fs::read_dir(directory).with_context(|| format!("reading {}", directory.display()))?
@@ -330,10 +445,13 @@ fn read_content(
         let entry = entry?;
         let path = entry.path();
         let kind = entry.file_type()?;
+        let matched = asset_directory || matches_asset(path.strip_prefix(root)?, patterns);
         if kind.is_dir() {
-            read_content(root, &path, pages)?;
+            read_content(root, language_root, &path, patterns, matched, pages, assets)?;
+        } else if kind.is_file() && matched {
+            add_asset(root, path, assets)?;
         } else if kind.is_file() && path.extension().is_some_and(|extension| extension == "md") {
-            let relative = path.strip_prefix(root)?.to_owned();
+            let relative = path.strip_prefix(language_root)?.to_owned();
             ensure!(
                 relative.to_str().is_some(),
                 "Markdown path is not UTF-8: {}",
@@ -360,7 +478,9 @@ fn render_markdown(path: &Path, source: &str) -> Markdown {
             }
             Event::Text(text) | Event::Code(text) if reading_heading => title.push_str(text),
             Event::SoftBreak | Event::HardBreak if reading_heading => title.push(' '),
-            Event::Start(Tag::Link { dest_url, .. }) => links.push(dest_url.to_string()),
+            Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
+                links.push(dest_url.to_string())
+            }
             _ => {}
         }
         match event {
@@ -449,19 +569,18 @@ fn valid_language(language: &str) -> bool {
 }
 
 fn page_url(file: &Path) -> String {
-    let mut url = String::new();
-    let directory_index = file.file_name().is_some_and(|name| name == "index.html");
-    let path = if directory_index {
-        file.parent().expect("index has a parent")
+    if file.file_name().is_some_and(|name| name == "index.html") {
+        format!("{}/", file_url(file.parent().expect("index has a parent")))
     } else {
-        file
-    };
+        file_url(file)
+    }
+}
+
+fn file_url(path: &Path) -> String {
+    let mut url = String::new();
     for part in path {
         url.push('/');
         url.push_str(&encode(part.to_str().expect("validated UTF-8 path")));
-    }
-    if directory_index {
-        url.push('/');
     }
     url
 }
@@ -499,6 +618,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preview_serves_shared_and_localized_assets() {
+        let source = tempfile::tempdir().unwrap();
+        let root = source.path();
+        fs::create_dir(root.join("en")).unwrap();
+        fs::create_dir(root.join("de")).unwrap();
+        fs::write(root.join("en/index.md"), "# Home").unwrap();
+        fs::write(root.join("de/index.md"), "# Startseite").unwrap();
+        fs::write(root.join("site.css"), "body {}").unwrap();
+        fs::write(root.join("en/banner image.svg"), "<svg/>").unwrap();
+
+        let patterns = ["*.css", "*.svg"].map(|pattern| Pattern::new(pattern).unwrap());
+        let site = Site::load(root, "en", None, &patterns).unwrap();
+        assert_eq!(
+            site.preview("/site.css").unwrap().unwrap(),
+            ("text/css".into(), b"body {}".to_vec())
+        );
+        for url in ["/en/banner%20image.svg", "/banner%20image.svg"] {
+            assert_eq!(
+                site.preview(url).unwrap().unwrap(),
+                ("image/svg+xml".into(), b"<svg/>".to_vec())
+            );
+        }
+        assert!(site.preview("/de/banner%20image.svg").unwrap().is_none());
+        assert!(site.preview("/en/index.md").unwrap().is_none());
+    }
+
+    #[test]
     fn export_does_not_publish_when_two_pages_resolve_to_the_same_file() {
         let destination = tempfile::tempdir().unwrap();
         let output = destination.path().join("site");
@@ -518,6 +664,7 @@ mod tests {
             default_language: "en".to_owned(),
             languages: BTreeSet::from(["en".to_owned()]),
             pages,
+            assets: BTreeMap::new(),
             missing_translations: Vec::new(),
         };
 
